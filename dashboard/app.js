@@ -13,7 +13,34 @@
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, compare: new Set(), compareNote: '' };
+  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, starredOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, compare: new Set(), compareNote: '', starred: new Set() };
+
+  // Starred protocols: the reader's own shortlist, kept in localStorage under
+  // token-radar-starred as an array of slugs. It is separate from the board's
+  // watchlist, which comes from the snapshot, and it survives reloads.
+  var STAR_KEY = 'token-radar-starred';
+  function loadStarred() {
+    try {
+      var raw = window.localStorage.getItem(STAR_KEY);
+      if (!raw) return new Set();
+      var parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.filter(function (s) { return typeof s === 'string'; }));
+    } catch (e) { return new Set(); }
+  }
+  function saveStarred() {
+    try { window.localStorage.setItem(STAR_KEY, JSON.stringify(Array.from(state.starred))); }
+    catch (e) { /* private mode: stars last for this visit only */ }
+  }
+  function isStarred(slug) { return state.starred.has(slug); }
+  function toggleStarred(slug) {
+    if (state.starred.has(slug)) state.starred.delete(slug);
+    else state.starred.add(slug);
+    saveStarred();
+    render();
+  }
+  function starredCount() { return state.starred.size; }
+  state.starred = loadStarred();
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -246,6 +273,30 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
+  // Reset every filter at once: search, category, chain, watchlist-only,
+  // starred-only and the comparison picks, then back to the pre-token tab.
+  function resetFilters() {
+    state.q = '';
+    state.category = 'all';
+    state.chain = 'all';
+    state.watchlistOnly = false;
+    state.starredOnly = false;
+    state.tab = 'pre-token';
+    state.compare.clear();
+    state.compareNote = '';
+    writeHash();
+    render();
+  }
+  // The starred toolbar lives in index.html outside the re-rendered shell,
+  // so its pressed state and count label are synced here on every render.
+  function syncStarToolbar() {
+    var toggle = document.getElementById('starred-only');
+    if (toggle) {
+      toggle.setAttribute('aria-pressed', state.starredOnly ? 'true' : 'false');
+      toggle.textContent = '★ 仅看收藏' + (starredCount() ? ' (' + starredCount() + ')' : '');
+    }
+  }
+
   function readHash() {
     var hash = window.location.hash.replace(/^#/, '');
     if (!hash) return;
@@ -275,6 +326,7 @@
       if (state.category !== 'all' && r.category !== state.category) return false;
       if (state.chain !== 'all' && (!r.chains || r.chains.indexOf(state.chain) < 0)) return false;
       if (state.watchlistOnly && !isWatchlist(r)) return false;
+      if (state.starredOnly && !isStarred(r.slug)) return false;
       if (!q) return true;
       var hay = [r.name, r.slug, r.category, (r.chains || []).join(' ')].join(' ').toLowerCase();
       return hay.indexOf(q) >= 0;
@@ -385,7 +437,7 @@
       return el('div', { class: 'panel' }, el('div', { class: 'empty' },
         el('h2', { text: 'No protocol matches that filter' }),
         el('p', { text: 'Clear the search or pick another category to see the board again.' }),
-        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: function () { state.q = ''; state.category = 'all'; state.chain = 'all'; state.watchlistOnly = false; writeHash(); render(); } })
+        el('button', { class: 'button primary', type: 'button', text: 'Clear filters', onclick: resetFilters })
       ));
     }
     var max = list[0].implied_value_usd || 1;
@@ -399,6 +451,14 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
+        el('td', null, el('button', {
+          type: 'button', class: 'star-btn' + (isStarred(r.slug) ? ' starred' : ''),
+          'aria-label': (isStarred(r.slug) ? 'Unstar ' : 'Star ') + r.name,
+          'aria-pressed': isStarred(r.slug) ? 'true' : 'false',
+          title: isStarred(r.slug) ? 'Remove from starred' : 'Star this protocol',
+          text: isStarred(r.slug) ? '★' : '☆',
+          onclick: function (e) { e.stopPropagation(); toggleStarred(r.slug); }
+        })),
         el('td', null, el('input', {
           type: 'checkbox', class: 'compare-box', 'aria-label': 'Compare ' + r.name,
           checked: state.compare.has(r.slug) ? 'checked' : null,
@@ -427,6 +487,7 @@
         el('table', null,
           el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
+            el('th', { scope: 'col', 'aria-label': 'Starred', text: '★' }),
             el('th', { scope: 'col', text: 'Compare' }),
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
@@ -492,6 +553,39 @@
     );
   }
 
+  // Farm plan as a timeline: each step gets a number and a phase tag.
+  // Eight steps split 2 / 3 / 3 into prepare, execute and hold-and-claim;
+  // shorter plans split into thirds so the three phases still appear.
+  function phaseForStep(index, total) {
+    var first, second;
+    if (total >= 8) { first = 2; second = 5; }
+    else {
+      first = Math.max(1, Math.ceil(total / 3));
+      second = Math.max(first + 1, Math.ceil((total * 2) / 3));
+    }
+    if (index < first) return { label: '准备', cls: 'phase-prep' };
+    if (index < second) return { label: '执行', cls: 'phase-exec' };
+    return { label: '持有与领奖', cls: 'phase-hold' };
+  }
+  function farmTimeline(steps) {
+    var items = steps.map(function (s, i) {
+      var at = s.indexOf(' Cost: ');
+      var action = at >= 0 ? s.slice(0, at) : s;
+      var tail = at >= 0 ? s.slice(at + 1) : '';
+      var phase = phaseForStep(i, steps.length);
+      var last = i === steps.length - 1;
+      return el('li', { class: 'timeline-step' + (last ? ' timeline-last' : '') },
+        el('span', { class: 'timeline-dot', 'aria-hidden': 'true', text: String(i + 1) }),
+        el('div', { class: 'timeline-body' },
+          el('span', { class: 'phase-tag ' + phase.cls, text: phase.label }),
+          el('b', { text: action }),
+          tail ? el('span', { class: 'cost', text: tail }) : null
+        )
+      );
+    });
+    return el('ol', { class: 'timeline' }, items);
+  }
+
   var dialog = el('dialog', { class: 'detail', id: 'detail', 'aria-labelledby': 'detail-title' });
   dialog.addEventListener('close', function () { state.selected = null; writeHash(); });
 
@@ -526,12 +620,7 @@
     ));
     dialog.appendChild(el('section', { class: 'detail-section' },
       el('h3', { text: 'Farm plan' }),
-      el('ol', { class: 'steps' }, steps.map(function (s) {
-        var at = s.indexOf(' Cost: ');
-        var action = at >= 0 ? s.slice(0, at) : s;
-        var tail = at >= 0 ? s.slice(at + 1) : '';
-        return el('li', null, el('b', { text: action }), el('span', { class: 'cost', text: tail }));
-      }))
+      farmTimeline(steps)
     ));
     if (typeof dialog.showModal === 'function') {
       if (!dialog.open) dialog.showModal();
@@ -552,6 +641,7 @@
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
+    syncStarToolbar();
     if (!dialog.isConnected) app.appendChild(dialog);
     if (state.selected) openDetail(state.selected);
   }
@@ -560,6 +650,14 @@
   render();
   var exportBtn = document.getElementById('export-csv');
   if (exportBtn) exportBtn.addEventListener('click', exportCsv);
+  var starredBtn = document.getElementById('starred-only');
+  if (starredBtn) starredBtn.addEventListener('click', function () {
+    state.starredOnly = !state.starredOnly;
+    writeHash();
+    render();
+  });
+  var resetBtn = document.getElementById('reset-filters');
+  if (resetBtn) resetBtn.addEventListener('click', resetFilters);
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && dialog.open) dialog.close();
   });

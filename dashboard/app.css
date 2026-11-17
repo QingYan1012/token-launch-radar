@@ -180,6 +180,39 @@ tbody tr[data-selected="true"] { background: color-mix(in srgb, var(--accent) 10
 .steps b { display: block; font-weight: 500; }
 .cost { color: var(--muted); font-size: 12px; font-family: var(--font-num); }
 
+/* Starred protocols: per-row star button and the starred-only toolbar toggle. */
+.tools-actions { display: flex; align-items: center; gap: var(--step-2); }
+.star-toggle[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.reset-btn { min-height: 36px; }
+.star-btn {
+  border: 0; background: none; padding: 2px 4px; font-size: 18px; line-height: 1;
+  color: var(--muted);
+}
+.star-btn:hover { color: var(--accent); transform: scale(1.15); }
+.star-btn.starred { color: #d9930d; }
+
+/* Farm timeline: numbered dots on a vertical rail, one phase tag per step. */
+.timeline { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--step-3); }
+.timeline-step { position: relative; display: flex; gap: var(--step-3); padding-left: 44px; min-height: 40px; }
+.timeline-step::before {
+  content: ""; position: absolute; left: 19px; top: 40px; bottom: -12px; width: 2px;
+  background: var(--border);
+}
+.timeline-step.timeline-last::before { display: none; }
+.timeline-dot {
+  position: absolute; left: 0; top: 0; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--accent); color: var(--surface); font-family: var(--font-num); font-size: 14px; font-weight: 600;
+}
+.timeline-body { display: grid; gap: 2px; align-content: start; padding-top: 2px; }
+.timeline-body b { font-weight: 500; }
+.phase-tag {
+  justify-self: start; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 600;
+}
+.phase-prep { background: #e8eefc; color: #2f4fb3; }
+.phase-exec { background: var(--accent-soft); color: var(--accent); }
+.phase-hold { background: #fdf3dd; color: #8a6100; }
+
 @media (max-width: 1100px) {
   .highlights { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
