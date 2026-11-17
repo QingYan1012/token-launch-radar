@@ -13,7 +13,7 @@
   var DATA = window.RADAR;
   if (!DATA) return;
   var app = document.getElementById('board');
-  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null };
+  var state = { q: '', category: 'all', chain: 'all', watchlistOnly: false, tab: 'pre-token', sort: 'implied', dir: -1, selected: null, compare: new Set(), compareNote: '' };
 
   var usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
   function fmtUsd(n) {
@@ -138,6 +138,112 @@
       { text: "Watch " + p.name + "'s own announcements for a token or points update, and ignore claim links that arrive by message or email.", cost: 'nothing to watch', time: '5 minutes a week' },
       { text: 'Write the wallet, the dates and every transaction in a farm log so you can repeat the position or unwind it.', cost: 'nothing but the log', time: '5 minutes' }
     ].map(stepText);
+  }
+
+  // Protocol comparison: pick at most two rows and see them side by side.
+  // The choice lives in a Set of slugs so a row can never be picked twice,
+  // and the panel only appears once exactly two are picked.
+  function rowBySlug(slug) {
+    return DATA.rows.filter(function (r) { return r.slug === slug; })[0] || null;
+  }
+  function toggleCompare(slug, picked) {
+    if (picked) {
+      if (state.compare.size >= 2) {
+        state.compareNote = 'Compare holds at most two protocols — clear one first.';
+        render();
+        return;
+      }
+      state.compare.add(slug);
+      state.compareNote = '';
+    } else {
+      state.compare.delete(slug);
+      state.compareNote = '';
+    }
+    render();
+  }
+  function clearCompare() {
+    state.compare.clear();
+    state.compareNote = '';
+    render();
+  }
+  function leadLine(label, a, b, valueOf, fmt) {
+    var va = valueOf(a), vb = valueOf(b);
+    if (va === null || va === undefined || vb === null || vb === undefined || !isFinite(va) || !isFinite(vb)) return label + ': not comparable here.';
+    if (va === vb) return label + ': tied at ' + fmt(va) + '.';
+    var lead = va > vb ? a : b, trail = va > vb ? b : a;
+    var top = va > vb ? va : vb, bottom = va > vb ? vb : va;
+    return label + ': ' + lead.name + ' leads ' + trail.name + ' (' + fmt(top) + ' vs ' + fmt(bottom) + ').';
+  }
+  function compareCard(row) {
+    function fact(label, value) {
+      return el('div', { class: 'cmp-fact' }, el('span', { text: label }), el('b', { class: 'num', text: value }));
+    }
+    return el('article', { class: 'cmp-card' },
+      el('h3', { text: '#' + row.rank + ' ' + row.name }),
+      el('p', { class: 'sub', text: (row.category || 'Other') + ' · ' + (row.chains || []).join(', ') }),
+      fact('TVL', fmtUsd(row.tvl_usd)),
+      fact('7-day change', fmtPct(row.change_7d)),
+      fact('Chains', String((row.chains || []).length)),
+      fact('Implied value', fmtUsd(row.implied_value_usd)),
+      fact('Rank', '#' + row.rank),
+      fact('Farm steps', String(farmSteps(row).length))
+    );
+  }
+  function syncComparePanel() {
+    var slot = document.getElementById('compare-panel');
+    if (!slot) return;
+    slot.textContent = '';
+    if (state.compare.size < 2) {
+      if (!state.compareNote) { slot.hidden = true; return; }
+      slot.hidden = false;
+      slot.appendChild(el('p', { class: 'cmp-hint', text: state.compareNote }));
+      return;
+    }
+    var picked = Array.from(state.compare).map(rowBySlug).filter(Boolean);
+    if (picked.length < 2) { slot.hidden = true; return; }
+    var a = picked[0], b = picked[1];
+    var verdicts = [
+      leadLine('TVL', a, b, function (r) { return r.tvl_usd; }, fmtUsd),
+      leadLine('Implied value', a, b, function (r) { return r.implied_value_usd; }, fmtUsd),
+      leadLine('7-day growth', a, b, function (r) { return r.change_7d; }, fmtPct),
+      leadLine('Chains', a, b, function (r) { return (r.chains || []).length; }, function (n) { return String(n); })
+    ];
+    slot.hidden = false;
+    slot.appendChild(el('div', { class: 'cmp-head' },
+      el('h2', { text: 'Head to head: ' + a.name + ' vs ' + b.name }),
+      el('button', { type: 'button', class: 'button cmp-clear', text: 'Clear comparison', onclick: clearCompare })
+    ));
+    slot.appendChild(el('div', { class: 'cmp-grid' }, compareCard(a), compareCard(b)));
+    slot.appendChild(el('ul', { class: 'cmp-verdicts' }, verdicts.map(function (v) { return el('li', { text: v }); })));
+  }
+
+  // CSV export: the filtered board, as a file, with no server round-trip.
+  // The header names the columns; each row is one filtered protocol, quoted
+  // only when a value itself holds a comma, a quote or a newline.
+  function csvCell(value) {
+    var text = value === null || value === undefined ? '' : String(value);
+    return /[",\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+  }
+  function exportCsv() {
+    var list = sortedRows(rows());
+    var head = ['rank', 'name', 'category', 'tvl_usd', 'change_7d_pct', 'chains', 'implied_value_usd'];
+    var lines = [head.join(',')];
+    list.forEach(function (r) {
+      lines.push([
+        r.rank, r.name, r.category || '', r.tvl_usd,
+        r.change_7d === null || r.change_7d === undefined ? '' : r.change_7d,
+        (r.chains || []).join('; '), r.implied_value_usd
+      ].map(csvCell).join(','));
+    });
+    var blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var link = document.createElement('a');
+    link.href = url;
+    link.download = 'token-radar-board.csv';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   function readHash() {
@@ -293,6 +399,13 @@
         onclick: function () { openDetail(r.slug); },
         onkeydown: function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDetail(r.slug); } }
       },
+        el('td', null, el('input', {
+          type: 'checkbox', class: 'compare-box', 'aria-label': 'Compare ' + r.name,
+          checked: state.compare.has(r.slug) ? 'checked' : null,
+          onclick: function (e) { e.stopPropagation(); },
+          onkeydown: function (e) { e.stopPropagation(); },
+          onchange: function (e) { toggleCompare(r.slug, e.target.checked); }
+        })),
         el('td', { class: 'num', text: String(r.rank) }),
         el('td', null, el('div', { class: 'name' },
           el('b', { text: r.name }),
@@ -314,6 +427,7 @@
         el('table', null,
           el('caption', { class: 'sub', text: 'Pre-token protocols, strongest implied value first. Select a row for its model and farm plan.' }),
           el('thead', null, el('tr', null,
+            el('th', { scope: 'col', text: 'Compare' }),
             sortHeader('implied', 'Rank'),
             sortHeader('name', 'Protocol'),
             sortHeader('tvl', 'TVL'),
@@ -433,6 +547,7 @@
     shell.appendChild(lede());
     if (state.tab === 'pre-token') shell.appendChild(highlights());
     shell.appendChild(controls());
+    syncComparePanel();
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
     app.appendChild(shell);
@@ -443,6 +558,8 @@
 
   readHash();
   render();
+  var exportBtn = document.getElementById('export-csv');
+  if (exportBtn) exportBtn.addEventListener('click', exportCsv);
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape' && dialog.open) dialog.close();
   });

@@ -8,6 +8,11 @@
 </head>
 <body>
 <a class="skip" href="#board">Skip to the board</a>
+<div class="page-tools">
+  <span class="tools-note">Tick Compare on any two rows to see them head to head.</span>
+  <button id="export-csv" class="export-btn" type="button">Export CSV</button>
+</div>
+<section id="compare-panel" class="compare-panel" hidden aria-label="Protocol comparison"></section>
 <main id="board" tabindex="-1" aria-busy="true"></main>
 <script src="../data.js"></script>
 <script src="app.js"></script>
